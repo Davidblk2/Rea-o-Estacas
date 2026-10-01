@@ -8,9 +8,8 @@ import io
 # ==========================================
 # MOTOR DE CÁLCULO (BACK-END)
 # ==========================================
-def calcular_esforcos(nk, mx, my, largura, comprimento, altura, df_estacas):
-    peso_especifico = 25.0
-    peso_bloco = largura * comprimento * altura * peso_especifico
+def calcular_esforcos(nk, mx, my, peso_bloco, df_estacas):
+    # O peso do bloco agora vem pronto do front-end
     n_total = nk + peso_bloco
     
     x = df_estacas["Posição X (m)"].values
@@ -28,7 +27,7 @@ def calcular_esforcos(nk, mx, my, largura, comprimento, altura, df_estacas):
         esforco_final = parcela_n + parcela_mx + parcela_my
         esforcos.append(esforco_final)
         
-    return peso_bloco, n_total, esforcos
+    return n_total, esforcos
 
 # ==========================================
 # INTERFACE DO USUÁRIO (FRONT-END)
@@ -47,10 +46,26 @@ with col1:
     my = st.number_input("Momento em Y - My (kN.m):", value=50.0, step=5.0)
 
 with col2:
-    st.header("2. Dimensões do Bloco")
-    largura = st.number_input("Largura em X (m):", value=1.8, step=0.1)
-    comprimento = st.number_input("Comprimento em Y (m):", value=1.8, step=0.1)
-    altura = st.number_input("Altura Z (m):", value=0.8, step=0.1)
+    st.header("2. Propriedades do Bloco")
+    
+    peso_direto = st.checkbox("Inserir peso do bloco diretamente (ignorar dimensões)")
+    
+    if peso_direto:
+        peso_bloco = st.number_input("Peso do Bloco (kN):", value=100.0, step=10.0)
+        formato = "Personalizado"
+        # Valores padrão apenas para o gráfico não quebrar
+        largura, comprimento, altura = 2.0, 2.0, 1.0
+    else:
+        formato = st.selectbox("Formato do Bloco", ["Retangular", "Triangular"])
+        largura = st.number_input("Largura em X (m):", value=1.8, step=0.1)
+        comprimento = st.number_input("Comprimento em Y (m):", value=1.8, step=0.1)
+        altura = st.number_input("Altura Z (m):", value=0.8, step=0.1)
+        
+        peso_especifico = 25.0 # kN/m³
+        if formato == "Retangular":
+            peso_bloco = largura * comprimento * altura * peso_especifico
+        elif formato == "Triangular":
+            peso_bloco = (largura * comprimento / 2.0) * altura * peso_especifico
 
 st.divider()
 st.header("3. Coordenadas das Estacas (m)")
@@ -68,7 +83,7 @@ tabela_estacas = st.data_editor(dados_iniciais, num_rows="dynamic", use_containe
 # AÇÃO DO BOTÃO E GERAÇÃO DA IMAGEM
 # ==========================================
 if st.button("Calcular Esforços", type="primary"):
-    peso, carga_total, resultados = calcular_esforcos(nk, mx, my, largura, comprimento, altura, tabela_estacas)
+    carga_total, resultados = calcular_esforcos(nk, mx, my, peso_bloco, tabela_estacas)
     
     st.divider()
     st.header("📊 Resultados do Dimensionamento")
@@ -78,9 +93,19 @@ if st.button("Calcular Esforços", type="primary"):
     # --- PARTE 1: O GRÁFICO (Lado Esquerdo) ---
     ax1 = fig.add_subplot(1, 2, 1)
     
-    retangulo = patches.Rectangle((-largura/2, -comprimento/2), largura, comprimento, 
+    # Renderização condicional da geometria no gráfico
+    if formato == "Triangular":
+        pontos = [[-largura/2, -comprimento/2], [largura/2, -comprimento/2], [0, comprimento/2]]
+        forma = patches.Polygon(pontos, linewidth=2, edgecolor='black', facecolor='lightgray', alpha=0.5)
+    elif formato == "Personalizado" and peso_direto:
+        # Se for peso direto, desenha um retângulo tracejado genérico
+        forma = patches.Rectangle((-largura/2, -comprimento/2), largura, comprimento, 
+                                  linewidth=2, edgecolor='gray', facecolor='none', linestyle='--', alpha=0.5)
+    else:
+        forma = patches.Rectangle((-largura/2, -comprimento/2), largura, comprimento, 
                                   linewidth=2, edgecolor='black', facecolor='lightgray', alpha=0.5)
-    ax1.add_patch(retangulo)
+        
+    ax1.add_patch(forma)
     ax1.plot(0, 0, marker='+', color='black', markersize=20, markeredgewidth=2)
     
     for i in range(len(tabela_estacas)):
@@ -92,15 +117,18 @@ if st.button("Calcular Esforços", type="primary"):
         circulo = patches.Circle((px, py), radius=0.15, edgecolor='black', facecolor=cor, alpha=0.9)
         ax1.add_patch(circulo)
         
-        # Desloca o texto para fora para evitar sobreposição no meio
         alinhamento = 'right' if px < 0 else 'left' if px > 0 else 'center'
         deslocamento_x = -0.2 if px < 0 else 0.2 if px > 0 else 0
         
         ax1.text(px + deslocamento_x, py + 0.1, f"E{i+1}: {esforco:.1f}kN", 
                  fontsize=10, color='black', fontweight='bold', ha=alinhamento, va='bottom')
 
-    ax1.set_xlim(-largura, largura)
-    ax1.set_ylim(-comprimento, comprimento)
+    # Ajusta os limites do gráfico dinamicamente com base nas estacas ou no bloco
+    limite_x = max(largura, max(abs(tabela_estacas["Posição X (m)"])) * 1.5) if len(tabela_estacas) > 0 else largura
+    limite_y = max(comprimento, max(abs(tabela_estacas["Posição Y (m)"])) * 1.5) if len(tabela_estacas) > 0 else comprimento
+    
+    ax1.set_xlim(-limite_x, limite_x)
+    ax1.set_ylim(-limite_y, limite_y)
     ax1.set_xlabel("Distância em X (m)")
     ax1.set_ylabel("Distância em Y (m)")
     ax1.set_aspect('equal', 'box')
@@ -134,9 +162,15 @@ if st.button("Calcular Esforços", type="primary"):
     
     texto(0.05, y, "[2] PROPRIEDADES DO BLOCO", negrito=True)
     y -= linha
-    texto(0.05, y, "Dimensões (LxCxA):"); texto(0.55, y, f"{largura}m x {comprimento}m x {altura}m")
+    if peso_direto:
+        texto(0.05, y, "Formato:"); texto(0.55, y, "Inserção Direta de Carga")
+    else:
+        texto(0.05, y, "Formato:"); texto(0.55, y, f"{formato}")
+        y -= linha
+        texto(0.05, y, "Dimensões:"); texto(0.55, y, f"B={largura}m, L={comprimento}m, h={altura}m")
+        
     y -= linha
-    texto(0.05, y, "Peso Próprio do Bloco:"); texto(0.55, y, f"{peso:.2f} kN")
+    texto(0.05, y, "Peso do Bloco:"); texto(0.55, y, f"{peso_bloco:.2f} kN")
     y -= linha
     texto(0.05, y, "Carga Vertical Total:"); texto(0.55, y, f"{carga_total:.2f} kN")
     y -= linha * 1.5
@@ -148,7 +182,6 @@ if st.button("Calcular Esforços", type="primary"):
         y -= linha
         
     y -= linha * 0.5
-    # Texto limpo sem os emojis para o Matplotlib não gerar caracteres estranhos
     if any(e < 0 for e in resultados):
         texto(0.05, y, "ATENÇÃO: Há estacas tracionadas!", negrito=True, cor='red')
     else:
